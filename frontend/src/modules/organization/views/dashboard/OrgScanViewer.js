@@ -217,10 +217,11 @@ async function decodeDicom(apiUrl, tok, onProgress = () => {}) {
   onProgress(100);
 
   const meta = {
-    patient:   str("x00100010")||"",
-    modality:  str("x00080060")||"",
-    series:    str("x0008103e")||"",
-    studyDate: str("x00080020")||"",
+    patient:     str("x00100010")||"",
+    modality:    str("x00080060")||"",
+    series:      str("x0008103e")||"",
+    studyDate:   str("x00080020")||"",
+    instanceNum: str("x00200013")||"",   // InstanceNumber — changes per slice
     rows, cols,
   };
   const result = { blobUrl, meta };
@@ -372,31 +373,24 @@ function OrgLogo() {
    Uses <img> so maxWidth/maxHeight/objectFit:contain work natively.
    ══════════════════════════════════════════════════════════════════════════ */
 function DicomViewer({ file, onProgress }) {
-  // If url is already absolute (S3 presigned URL), use as-is; else prepend API_BASE
   const full    = (file.url && (file.url.startsWith('http://') || file.url.startsWith('https://')))
-                    ? file.url
-                    : API_BASE + file.url;
+                    ? file.url : API_BASE + file.url;
   const cached  = RENDER_CACHE.get(full);
   const [result,   setResult]   = useState(cached || null);
   const [status,   setStatus]   = useState(cached ? "ok" : "loading");
   const [errMsg,   setErrMsg]   = useState("");
   const [progress, setProgress] = useState(cached ? 100 : 0);
+  const [zoom,     setZoom]     = useState(1.0);
 
   useEffect(() => {
+    setZoom(1.0); // reset zoom when file changes
     if (RENDER_CACHE.has(full)) {
       setResult(RENDER_CACHE.get(full)); setStatus("ok"); setProgress(100);
-      onProgress?.(100);
-      return;
+      onProgress?.(100); return;
     }
     let cancelled = false;
     setStatus("loading"); setProgress(0);
-
-    const handleProgress = (pct) => {
-      if (cancelled) return;
-      setProgress(pct);
-      onProgress?.(pct);
-    };
-
+    const handleProgress = (pct) => { if (cancelled) return; setProgress(pct); onProgress?.(pct); };
     decodeDicom(file.url, readToken(), handleProgress)
       .then(r => { if (!cancelled) { setResult(r); setStatus("ok"); } })
       .catch(e => { if (!cancelled) { setErrMsg(e.message||"decode error"); setStatus("error"); } });
@@ -405,12 +399,9 @@ function DicomViewer({ file, onProgress }) {
   }, [full]);
 
   return (
-    <div style={{ width:"100%", height:"100%", display:"flex", alignItems:"center", justifyContent:"center", position:"relative" }}>
+    <div style={{ width:"100%", height:"100%", display:"flex", alignItems:"center", justifyContent:"center", position:"relative", overflow:"hidden" }}>
 
-      {/* Loading overlay — visible until 100% */}
-      {status === "loading" && (
-        <LoadingOverlay progress={progress} filename={file.filename} />
-      )}
+      {status === "loading" && <LoadingOverlay progress={progress} filename={file.filename} />}
 
       {status === "error" && (
         <div style={{ color:"#f87171", ...mono, fontSize:13, textAlign:"center", padding:"0 32px" }}>
@@ -420,23 +411,45 @@ function DicomViewer({ file, onProgress }) {
 
       {result?.blobUrl && (
         <>
+          {/* Image always fills the container — transform:scale handles zoom.
+              width/height 100% + objectFit:contain normalises all image sizes. */}
           <img
             src={result.blobUrl}
             alt="DICOM"
             style={{
-              maxWidth:"100%", maxHeight:"100%",
+              width:"100%", height:"100%",
               objectFit:"contain", imageRendering:"pixelated",
               borderRadius:6,
               display: status === "ok" ? "block" : "none",
               animation: "fadeIn 0.3s ease",
+              transform: `scale(${zoom})`,
+              transformOrigin: "center center",
+              transition: "transform 0.12s ease",
             }}
           />
+
+          {/* ── Zoom controls (top-right) ── */}
+          {status === "ok" && (
+            <div style={{ position:"absolute", top:8, right:8, display:"flex", flexDirection:"column", gap:4, zIndex:10 }}>
+              <button onClick={() => setZoom(z => Math.min(5.0, +(z+0.2).toFixed(1)))}
+                style={{ width:32, height:32, borderRadius:6, border:"1px solid rgba(255,255,255,0.15)", background:"rgba(20,25,40,0.88)", color:"#e2e8f0", fontSize:18, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}
+                title="Zoom in">＋</button>
+              <button onClick={() => setZoom(1.0)}
+                style={{ width:32, height:32, borderRadius:6, border:"1px solid rgba(255,255,255,0.15)", background:"rgba(20,25,40,0.88)", color:"#94a3b8", fontSize:10, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"monospace" }}
+                title="Reset zoom">{Math.round(zoom*100)}%</button>
+              <button onClick={() => setZoom(z => Math.max(0.2, +(z-0.2).toFixed(1)))}
+                style={{ width:32, height:32, borderRadius:6, border:"1px solid rgba(255,255,255,0.15)", background:"rgba(20,25,40,0.88)", color:"#e2e8f0", fontSize:22, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", lineHeight:1 }}
+                title="Zoom out">−</button>
+            </div>
+          )}
+
           {result.meta && (
             <div style={{ position:"absolute", bottom:12, left:12, ...MetaOverlayStyle }}>
-              {result.meta.patient   && <span>Pt: <b style={{color:"#e2e8f0"}}>{result.meta.patient}</b></span>}
-              {result.meta.modality  && <span>Mod: <b style={{color:"#60a5fa"}}>{result.meta.modality}</b></span>}
-              {result.meta.series    && <span>{result.meta.series}</span>}
-              {result.meta.studyDate && <span>{result.meta.studyDate}</span>}
+              {result.meta.patient     && <span>Pt: <b style={{color:"#e2e8f0"}}>{result.meta.patient}</b></span>}
+              {result.meta.modality    && <span>Mod: <b style={{color:"#60a5fa"}}>{result.meta.modality}</b></span>}
+              {result.meta.instanceNum && <span>Inst: <b style={{color:"#fbbf24"}}>{result.meta.instanceNum}</b></span>}
+              {result.meta.series      && <span>{result.meta.series}</span>}
+              {result.meta.studyDate   && <span>{result.meta.studyDate}</span>}
               <span>{result.meta.cols}×{result.meta.rows}px</span>
             </div>
           )}
@@ -528,7 +541,24 @@ function NiftiViewer({ file }) {
           <span style={{...mono,fontSize:13}}>Loading NIfTI…</span>
         </div>
       )}
-      {status==="error" && <div style={{ color:"#f87171", ...mono, fontSize:13 }}>⚠ NIfTI error: {errMsg}</div>}
+      {status==="error" && (
+        /* PNG/JPG files saved with .nii extension — try native <img> first.
+           If the browser can render it, great. If not, show the error text. */
+        <div style={{ width:"100%", height:"100%", display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column", position:"relative" }}>
+          <img
+            src={full}
+            alt="scan"
+            style={{ width:"100%", height:"100%", objectFit:"contain", imageRendering:"pixelated", display:"block" }}
+            onError={(e) => { e.target.style.display="none"; e.target.nextSibling.style.display="block"; }}
+          />
+          <div style={{ display:"none", color:"#f87171", ...mono, fontSize:13, textAlign:"center", padding:"0 32px" }}>
+            ⚠ NIfTI error: {errMsg}
+          </div>
+          <div style={{ position:"absolute", bottom:8, left:8, background:"rgba(0,0,0,0.55)", borderRadius:6, padding:"3px 10px", fontSize:10, color:"#94a3b8", ...mono }}>
+            ⚠ PNG rendered (wrong .nii extension)
+          </div>
+        </div>
+      )}
       <canvas ref={canvasRef} style={{
         display:status==="ok"?"block":"none",
         maxWidth:"100%", maxHeight:"calc(100% - 52px)",
@@ -696,35 +726,54 @@ export default function OrgScanViewer() {
       .finally(() => setLoading(false));
   }, [caseId]);
 
-  /* ── PRE-FETCH + PRE-DECODE all files in parallel as soon as list arrives ── */
+  /* ── PRE-FETCH + PRE-DECODE files with limited concurrency ─────────────── */
+  /* Fires at most 4 parallel decode workers. Launching all 95 simultaneously
+     chokes the browser (6-connection limit) and causes most fetches to fail. */
   useEffect(() => {
     if (!files.length) return;
     const tok = readToken();
+    let nextIdx = 0;
+    let cancelled = false;
 
-    files.forEach(async (f) => {
-      const ft = detectType(f.filename);
-      try {
-        if      (ft==="dcm")              await decodeDicom(f.url, tok);
-        else if (ft==="jpg"||ft==="png")  await fetchImgBlob(f.url, tok);
-        else if (ft==="nii")              await parseNifti(f.url, tok);
-        /* Increment ready count so header pill updates */
-        setReadyCnt(n => n + 1);
-      } catch (e) {
-        /* Prefetch failures are silent; viewer falls back to on-demand decode */
-        console.warn("[OSV prefetch]", f.filename, e?.message || e);
-        setReadyCnt(n => n + 1);
+    const runWorker = async () => {
+      while (!cancelled) {
+        const myIdx = nextIdx++;
+        if (myIdx >= files.length) break;
+        const f = files[myIdx];
+        const ft = detectType(f.filename);
+        try {
+          if      (ft==="dcm")             await decodeDicom(f.url, tok);
+          else if (ft==="jpg"||ft==="png") await fetchImgBlob(f.url, tok);
+          else if (ft==="nii")             await parseNifti(f.url, tok);
+        } catch (e) {
+          console.warn("[OSV prefetch]", f.filename, e?.message || e);
+        }
+        if (!cancelled) setReadyCnt(n => n + 1);
       }
-    });
+    };
+
+    // 4 parallel workers — enough to saturate connection pool without killing it
+    const CONCURRENCY = 4;
+    Array.from({ length: CONCURRENCY }, () => runWorker());
+
+    return () => { cancelled = true; };
   }, [files]);
 
   /* ── Navigation ── */
   const goTo = useCallback((idx) => {
-    setCurrentIdx(prev => {
-      const n = files.length; if (!n) return prev;
-      return Math.max(0, Math.min(idx, n-1));
-    });
-    setCurrentProgress(0); // reset bar for the incoming file
-  }, [files.length]);
+    const n = files.length; if (!n) return;
+    const next = Math.max(0, Math.min(idx, n - 1));
+    setCurrentIdx(next);
+    // Only reset progress to 0 if the target file isn't already decoded.
+    // For cached files, image renders instantly — no 0% flash.
+    const targetFile = files[next];
+    if (targetFile) {
+      const targetFull = resolveUrl(targetFile.url);
+      setCurrentProgress(RENDER_CACHE.has(targetFull) ? 100 : 0);
+    } else {
+      setCurrentProgress(0);
+    }
+  }, [files]);
 
   /* ── Keyboard ← → ── */
   useEffect(() => {

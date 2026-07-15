@@ -1002,6 +1002,20 @@ def dashboard_cases(user=Depends(get_current_user)):
     pending:   List[dict] = []
     modality_counts: Dict[str, int] = {}
 
+    # ── Modality counts from ALL org uploads (bulk_uploads) ──────────────────
+    # We count modalities from organization_schema.bulk_uploads instead of
+    # case_submission so that cases still in QC / radiologist pipeline are
+    # included. This fixes the "Cases by Modality" card showing only 1 CT
+    # (the one completed case) instead of all 5 uploaded cases.
+    try:
+        bulk_mod_rows = crud.list_bulk_upload_modalities_for_org(org_id, user_id)
+        for bm in bulk_mod_rows:
+            mod = _norm_modality(bm.get("modality_type"))
+            modality_counts[mod] = modality_counts.get(mod, 0) + 1
+    except Exception as _bm_err:
+        print(f"[dashboard] bulk_upload modality count failed: {_bm_err}")
+        # fall through — modality_counts stays empty; frontend handles gracefully
+
     # Aggregators for KPI subtitles
     comp_stat = comp_urgent = comp_routine = 0
     queue_stat = queue_urgent = 0
@@ -1013,8 +1027,8 @@ def dashboard_cases(user=Depends(get_current_user)):
     for s in rows:
         base = _build_case_row(s)
 
-        # Modality count goes against EVERY case for the org (not just completed)
-        modality_counts[base["modality"]] = modality_counts.get(base["modality"], 0) + 1
+        # NOTE: modality_counts is now pre-populated from bulk_uploads above.
+        # Do NOT add to it here — that would double-count completed cases.
 
         if s.get("completed_at"):
             # Completed bucket
@@ -1458,35 +1472,71 @@ def get_case_files(case_id: str, user=Depends(get_current_user)):
         except Exception:
             img_files = [f.strip() for f in img_files.split(",") if f.strip()]
 
-    files = []
-    for fname in img_files:
-        if not fname:
-            continue
-        ext = os.path.splitext(fname)[1].lower()
-        if ext == ".dcm":
-            ft = "dcm"
-        elif ext == ".nii" or fname.lower().endswith(".nii.gz"):
-            ft = "nii"
-        else:
-            ft = "other"
-        # Build URL — use presigned S3 URL if available, else local path
-        row_s3_key = row.get("s3_key") or None
-        row_storage = row.get("storage_type") or "local"
-        file_url = f"/organization/scan-files/{subject_id}/{fname}"
-        if row_storage == "s3" and row_s3_key:
-            try:
-                from s3_storage import presigned_download
-                file_url = presigned_download(row_s3_key)
-            except Exception as _e:
-                print(f"[case-files] presigned URL failed: {_e}")
+    row_s3_key  = row.get("s3_key") or None
+    row_storage = row.get("storage_type") or "local"
 
-        files.append({
-            "filename":     fname,
-            "file_type":    ft,
-            "url":          file_url,
-            "s3_key":       row_s3_key,
-            "storage_type": row_storage,
-        })
+    # ── S3: list the folder, render EVERYTHING inside it ─────────────────────
+    # s3_key = folder prefix e.g. "uploads/dicom/GENRAD-SUB-433731/"
+    # We list all S3 objects under that prefix and generate a presigned URL for
+    # each one — no matching against image_file_names needed.
+    # Whatever is in the S3 folder gets rendered in the viewer.
+    files = []
+    if row_storage == "s3" and row_s3_key:
+        try:
+            import boto3 as _boto3
+            from s3_storage import presigned_download
+            # Normalise to folder prefix
+            if "." in row_s3_key.rsplit("/", 1)[-1]:
+                s3_folder = row_s3_key.rsplit("/", 1)[0] + "/"
+            else:
+                s3_folder = row_s3_key.rstrip("/") + "/"
+            bucket = os.environ.get("S3_BUCKET", "onix-s3")
+            region = os.environ.get("AWS_DEFAULT_REGION", "ap-south-1")
+            s3c    = _boto3.client("s3", region_name=region)
+            resp   = s3c.list_objects_v2(Bucket=bucket, Prefix=s3_folder)
+            objs   = resp.get("Contents", [])
+            print(f"[case-files] S3 folder {s3_folder!r} → {len(objs)} objects")
+            for obj in objs:
+                key   = obj["Key"]
+                fname = key.split("/")[-1]          # actual filename in S3
+                if not fname:
+                    continue
+                ext = os.path.splitext(fname)[1].lower()
+                if ext == ".dcm":
+                    ft = "dcm"
+                elif ext == ".nii" or fname.lower().endswith(".nii.gz"):
+                    ft = "nii"
+                else:
+                    ft = "other"
+                files.append({
+                    "filename":     fname,
+                    "file_type":    ft,
+                    "url":          presigned_download(key),
+                    "s3_key":       key,
+                    "storage_type": "s3",
+                })
+        except Exception as _e:
+            print(f"[case-files] S3 folder listing failed: {_e}")
+
+    # ── Local fallback: use image_file_names from bulk_uploads ───────────────
+    if not files:
+        for fname in img_files:
+            if not fname:
+                continue
+            ext = os.path.splitext(fname)[1].lower()
+            if ext == ".dcm":
+                ft = "dcm"
+            elif ext == ".nii" or fname.lower().endswith(".nii.gz"):
+                ft = "nii"
+            else:
+                ft = "other"
+            files.append({
+                "filename":     fname,
+                "file_type":    ft,
+                "url":          f"/organization/scan-files/{subject_id}/{fname}",
+                "s3_key":       row_s3_key,
+                "storage_type": row_storage or "local",
+            })
 
     return {
         "case_id":    case_id,

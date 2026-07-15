@@ -382,7 +382,15 @@ export default function DicomToolbar({
           <div style={{ position: "relative", display: "flex" }}>
             {/* Main toggle */}
             <button className="vtb-btn"
-              onClick={() => { setCrosshairEnabled?.((v) => !v); setShowPtrMenu(false); }}
+              onClick={() => {
+                // Turning it ON always lands in Line mode — a leftover
+                // Pointer/Sync+Pointer mode from a previous session shouldn't
+                // silently persist onto a fresh activation. The chevron
+                // dropdown remains the way to explicitly pick another mode.
+                if (!crosshairEnabled) setCrosshairMode?.("line");
+                setCrosshairEnabled?.((v) => !v);
+                setShowPtrMenu(false);
+              }}
               title={crosshairEnabled ? "3D Pointer ON — click to turn off" : "3D Pointer OFF — click to turn on"}
               aria-label="3D Pointer"
               style={{

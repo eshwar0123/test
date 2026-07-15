@@ -5,11 +5,130 @@
 // mode="pointer" → center dot only
 
 import { useEffect, useRef } from "react";
+import * as csCore from "@cornerstonejs/core";
+
+const { Enums: csEnums } = csCore;
 
 const DEFAULT_VP_IDS = ["MPR_VOL_AX", "MPR_VOL_SAG", "MPR_VOL_COR"];
 const COLORS  = ["#378ADD", "#EF9F27", "#97C459"];
 
 const dot3 = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+
+// Stack viewports (2D image-by-image series, used by mpr3/compare/grid) do
+// NOT reslice via camera focal-point translation the way volume/orthographic
+// viewports do — vp.setCamera() only pans/zooms the currently displayed
+// image on a stack. "Reslicing" a stack means jumping to whichever image in
+// it sits closest to the target world point, via setImageIdIndex(). This is
+// ONLY reached from the non-volMpr call site (stack vpIds) — the volMpr call
+// always passes true volume/orthographic viewports, so this branch is never
+// exercised there and that behavior is unchanged.
+const isStackViewport = (vp) => {
+  try { return vp?.type === csEnums.ViewportType.STACK; } catch { return false; }
+};
+
+const stackPlaneNormal = (imageId) => {
+  try {
+    const mod = csCore.metaData.get("imagePlaneModule", imageId);
+    let row = mod?.rowCosines;
+    let col = mod?.columnCosines;
+    if ((!row || !col) && Array.isArray(mod?.imageOrientationPatient) && mod.imageOrientationPatient.length >= 6) {
+      const iop = mod.imageOrientationPatient;
+      row = [iop[0], iop[1], iop[2]];
+      col = [iop[3], iop[4], iop[5]];
+    }
+    if (!row || !col) return null;
+    const n = [
+      row[1] * col[2] - row[2] * col[1],
+      row[2] * col[0] - row[0] * col[2],
+      row[0] * col[1] - row[1] * col[0],
+    ];
+    const len = Math.hypot(n[0], n[1], n[2]) || 1;
+    return [n[0] / len, n[1] / len, n[2] / len];
+  } catch {
+    return null;
+  }
+};
+
+// Derive a plane normal straight from a series' own parsed geometry
+// (ImageOrientationPatient, falling back to the position delta between its
+// first/last slice) — the same source useViewerSync already relies on for
+// scroll-sync, used here only as a fallback for when the live Cornerstone
+// metadata provider hasn't got imagePlaneModule for these imageIds yet.
+const normalFromSeries = (series) => {
+  if (Array.isArray(series?.iop) && series.iop.length >= 6) {
+    const row = [series.iop[0], series.iop[1], series.iop[2]];
+    const col = [series.iop[3], series.iop[4], series.iop[5]];
+    const n = [
+      row[1] * col[2] - row[2] * col[1],
+      row[2] * col[0] - row[0] * col[2],
+      row[0] * col[1] - row[1] * col[0],
+    ];
+    const len = Math.hypot(n[0], n[1], n[2]) || 1;
+    if (len > 1e-9) return [n[0] / len, n[1] / len, n[2] / len];
+  }
+  const pts = (series?.positions || []).filter(Array.isArray);
+  if (pts.length >= 2) {
+    const a = pts[0];
+    const b = pts[pts.length - 1];
+    const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    const len = Math.hypot(d[0], d[1], d[2]) || 1;
+    if (len > 1e-6) return [d[0] / len, d[1] / len, d[2] / len];
+  }
+  return null;
+};
+
+const resliceStackViewport = (vp, worldPt, fallbackSeries) => {
+  try {
+    const imageIds = vp.getImageIds?.() || [];
+    if (!imageIds.length) { console.log("[3D Pointer/stack] no imageIds on target vp", vp?.id); return; }
+    const curIdx = vp.getCurrentImageIdIndex?.() ?? 0;
+
+    // Prefer live Cornerstone metadata (works whenever the WADO loader has
+    // already parsed IOP/IPP for these imageIds).
+    let normal = stackPlaneNormal(imageIds[curIdx]);
+    let source = "metadata";
+    let getIpp = (i) => {
+      const mod = csCore.metaData.get("imagePlaneModule", imageIds[i]);
+      return Array.isArray(mod?.imagePositionPatient) ? mod.imagePositionPatient : null;
+    };
+
+    // Fall back to the pre-parsed series geometry (parallel to
+    // vp.getImageIds() since both are built from series.urls in the same
+    // order) when live metadata isn't available for this pane's images.
+    if (!normal && fallbackSeries) {
+      normal = normalFromSeries(fallbackSeries);
+      source = "fallbackSeries";
+      const positions = fallbackSeries.positions || [];
+      getIpp = (i) => (Array.isArray(positions[i]) ? positions[i] : null);
+    }
+    if (!normal) {
+      console.log("[3D Pointer/stack] no plane normal found", {
+        vpId: vp?.id, hasFallbackSeries: !!fallbackSeries,
+      });
+      return;
+    }
+
+    const want = dot3(worldPt, normal);
+    let best = -1;
+    let bestErr = Infinity;
+    let ippFound = 0;
+    for (let i = 0; i < imageIds.length; i++) {
+      const ipp = getIpp(i);
+      if (!ipp) continue;
+      ippFound++;
+      const err = Math.abs(dot3(ipp, normal) - want);
+      if (err < bestErr) { bestErr = err; best = i; }
+    }
+    console.log("[3D Pointer/stack] reslice", {
+      vpId: vp?.id, source, curIdx, best, ippFound, total: imageIds.length,
+      willJump: best >= 0 && best !== curIdx,
+    });
+    if (best >= 0 && best !== curIdx) vp.setImageIdIndex(best);
+    vp.render?.();
+  } catch (e) {
+    console.log("[3D Pointer/stack] reslice threw", e);
+  }
+};
 
 export default function useVolumeMprCrosshair({
   enabled,
@@ -18,6 +137,12 @@ export default function useVolumeMprCrosshair({
   refs,
   readyToken = 0,
   vpIds = DEFAULT_VP_IDS,
+  // Optional — only used as a fallback source of slice geometry for STACK
+  // viewports when the live Cornerstone metadata provider doesn't have
+  // imagePlaneModule for a pane's images yet. Unused (and harmless if
+  // omitted) for the volMpr call, which never hits the stack branch.
+  availableSeries,
+  seriesUidForSlot,
 }) {
   const worldRef    = useRef(null);
   const overlaysRef = useRef({});
@@ -121,7 +246,14 @@ export default function useVolumeMprCrosshair({
     };
 
     // ── reslice a volume viewport to a world point ────────────────────────
-    const resliceViewport = (vp, worldPt) => {
+    const resliceViewport = (vp, worldPt, slot) => {
+      if (!vp) return;
+      if (isStackViewport(vp)) {
+        const uid = seriesUidForSlot?.(slot);
+        const fallbackSeries = uid ? availableSeries?.find?.((s) => s.seriesUid === uid) : null;
+        resliceStackViewport(vp, worldPt, fallbackSeries);
+        return;
+      }
       try {
         const cam = vp.getCamera?.();
         if (!cam) return;
@@ -153,7 +285,7 @@ export default function useVolumeMprCrosshair({
         worldRef.current = world;
         drawSlot(slot, cx, cy);
         for (let s = 0; s < 3; s++) {
-          if (s !== slot) resliceViewport(getVp(s), world);
+          if (s !== slot) resliceViewport(getVp(s), world, s);
         }
         requestAnimationFrame(() => { if (!disposedRef.current) drawAll(); });
       } catch {}

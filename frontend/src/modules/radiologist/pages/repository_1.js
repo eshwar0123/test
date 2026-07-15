@@ -865,9 +865,15 @@ export default function Repository1() {
     try {
       if (!document.fullscreenElement) {
         const root = document.documentElement;
-        (root.requestFullscreen || root.webkitRequestFullscreen)?.call(root);
+        const fn = root.requestFullscreen || root.webkitRequestFullscreen;
+        console.log('[fs] repo click, isTrusted-gesture ok, userActivation=', navigator.userActivation?.isActive, 'fullscreenEnabled=', document.fullscreenEnabled);
+        fn?.call(root)
+          ?.then(() => console.log('[fs] repo SUCCESS, fullscreenElement=', document.fullscreenElement?.tagName))
+          ?.catch((e) => console.log('[fs] repo REJECTED', e?.name, e?.message));
+      } else {
+        console.log('[fs] repo click, already fullscreenElement=', document.fullscreenElement?.tagName);
       }
-    } catch {}
+    } catch (e) { console.log('[fs] repo THREW', e); }
 
     let fileUrl  = item.fileUrl  || null;
     const filename = item.filename || null;

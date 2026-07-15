@@ -174,20 +174,21 @@ export default function CornerstoneDicomGrid({
     </div>
   );
 
-  /* Crosshair overlay — unchanged */
+  /* Crosshair overlay */
   const renderCrosshair = (slot) => {
-    if (!showDicomCrosshair || dicomTool !== "crosshair") return null;
+    if (!showDicomCrosshair) return null;
     const pos = dicomCrosshairBySlot?.[slot];
     if (!pos || pos.x == null || pos.y == null) return null;
-    const color = dicomCrosshairColor || "#00ff4c";
+    const color = dicomCrosshairColor || "#3b82f6";
     const R = 7;
+    const showLines = crosshairMode === "line";
     return (
       <>
-        {crosshairMode !== "pointer" && (
+        {showLines && (
           <div style={{ position: "absolute", left: pos.x, top: 0, bottom: 0,
             width: 1, background: color, pointerEvents: "none", zIndex: 28 }} />
         )}
-        {crosshairMode !== "pointer" && (
+        {showLines && (
           <div style={{ position: "absolute", top: pos.y, left: 0, right: 0,
             height: 1, background: color, pointerEvents: "none", zIndex: 28 }} />
         )}
@@ -380,6 +381,7 @@ export default function CornerstoneDicomGrid({
             className="cornerstone3d-viewport"
             onWheel={(e) => handleCornerstoneDicomWheel?.(0, e)}
             onMouseMove={(e) => updateDicomMouseCoords?.(0, e)}
+            onMouseDown={(e) => updateDicomMouseCoords?.(0, e)}
             onMouseLeave={() => clearDicomMouseCoords?.(0)}
             onContextMenu={(e) => {
               if (isMeasureToolActive) { e.preventDefault(); setActiveDicomSlot?.(0); deleteLastLengthOnDicomSlot?.(0, e); }
@@ -485,6 +487,7 @@ export default function CornerstoneDicomGrid({
               className="cornerstone3d-viewport"
               onWheel={(e) => handleCornerstoneDicomWheel?.(idx, e)}
               onMouseMove={(e) => updateDicomMouseCoords?.(idx, e)}
+              onMouseDown={(e) => updateDicomMouseCoords?.(idx, e)}
               onMouseLeave={() => clearDicomMouseCoords?.(idx)}
               onContextMenu={(e) => {
                 if (isMeasureToolActive) {
@@ -568,6 +571,7 @@ export default function CornerstoneDicomGrid({
                   className="cornerstone3d-viewport"
                   onWheel={(e) => handleCornerstoneDicomWheel?.(idx, e)}
                   onMouseMove={(e) => updateDicomMouseCoords?.(idx, e)}
+                  onMouseDown={(e) => updateDicomMouseCoords?.(idx, e)}
                   onMouseLeave={() => clearDicomMouseCoords?.(idx)}
                   onContextMenu={(e) => {
                     if (isMeasureToolActive) {
@@ -659,6 +663,7 @@ export default function CornerstoneDicomGrid({
                   className="cornerstone3d-viewport"
                   onWheel={(e) => handleCornerstoneDicomWheel(idx, e)}
                   onMouseMove={(e) => updateDicomMouseCoords(idx, e)}
+                  onMouseDown={(e) => updateDicomMouseCoords(idx, e)}
                   onMouseLeave={() => clearDicomMouseCoords(idx)}
                   onContextMenu={(e) => {
                     if (isMeasureToolActive) {
@@ -713,6 +718,7 @@ export default function CornerstoneDicomGrid({
             className="cornerstone3d-viewport"
             onWheel={(e) => handleCornerstoneDicomWheel(0, e)}
             onMouseMove={(e) => updateDicomMouseCoords(0, e)}
+            onMouseDown={(e) => updateDicomMouseCoords(0, e)}
             onMouseLeave={() => clearDicomMouseCoords(0)}
             onContextMenu={(e) => {
               if (isMeasureToolActive) {
@@ -751,6 +757,7 @@ export default function CornerstoneDicomGrid({
                 className="cornerstone3d-viewport"
                 onWheel={(e) => handleCornerstoneDicomWheel(slot, e)}
                 onMouseMove={(e) => updateDicomMouseCoords(slot, e)}
+                onMouseDown={(e) => updateDicomMouseCoords(slot, e)}
                 onMouseLeave={() => clearDicomMouseCoords(slot)}
                 onContextMenu={(e) => {
                   if (isMeasureToolActive) {
@@ -807,6 +814,7 @@ export default function CornerstoneDicomGrid({
                 className="cornerstone3d-viewport"
                 onWheel={(e) => handleCornerstoneDicomWheel(slot, e)}
                 onMouseMove={(e) => updateDicomMouseCoords(slot, e)}
+                onMouseDown={(e) => updateDicomMouseCoords(slot, e)}
                 onMouseLeave={() => clearDicomMouseCoords(slot)}
                 onContextMenu={(e) => {
                   if (isMeasureToolActive) {
@@ -827,3 +835,4 @@ export default function CornerstoneDicomGrid({
     </div>
   );
 }
+

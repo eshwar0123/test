@@ -591,7 +591,9 @@ def list_active_rad_scans_for_org(org_id: str, org_user_id) -> List[Dict[str, An
     radiologists.rad_id = rad_scans.assigned_rad_id. Each case shows the
     NAME OF THE RADIOLOGIST ASSIGNED TO IT, not the uploader.
 
-    Completed scans are excluded — this list powers the "Active Worklist".
+    ALL scans are returned (including completed). The worklist renders
+    completed cases with a COMPLETE status badge so the org can see the
+    full picture; the Case Queue card separately excludes completed cases.
     """
     return _all(
         """
@@ -620,7 +622,6 @@ def list_active_rad_scans_for_org(org_id: str, org_user_id) -> List[Dict[str, An
             (rs.id_organisation  = %(org_id)s
              OR rs.ref_organisation = %(org_id)s
              OR rs.id_organisation  = %(user_id)s)
-            AND LOWER(COALESCE(rs.status, 'pending')) NOT IN ('complete', 'completed', 'done')
         ORDER BY rs.scan_date DESC NULLS LAST
         LIMIT 100
         """,
@@ -685,8 +686,13 @@ def list_workflow_cases_for_org(org_id: str, org_user_id: str = None) -> List[Di
             placeholders = ", ".join(["%s"] * len(candidates))
             rows = _all(
                 f"{_CW_SELECT}"
-                f"WHERE cw.org_id::text IN ({placeholders})"
-                f"   OR cw.organization_user_id::text IN ({placeholders})"
+                f"WHERE (cw.org_id::text IN ({placeholders})"
+                f"       OR cw.organization_user_id::text IN ({placeholders}))"
+                f"  AND NOT EXISTS ("
+                f"      SELECT 1 FROM admin_schema.case_submission cs_done"
+                f"      WHERE cs_done.case_id = cw.case_id"
+                f"        AND cs_done.completed_at IS NOT NULL"
+                f"  )"
                 f" ORDER BY cw.case_id, cw.created_at DESC NULLS LAST LIMIT 300",
                 tuple(candidates) * 2,          # doubled: once for org_id, once for user_id check
             )
@@ -722,6 +728,11 @@ def list_workflow_cases_for_org(org_id: str, org_user_id: str = None) -> List[Di
                        OR rs.id_organisation  = %s
                    )
             LEFT JOIN organization_schema.bulk_uploads bu ON bu.case_id = cw.case_id
+            WHERE NOT EXISTS (
+                SELECT 1 FROM admin_schema.case_submission cs_done
+                WHERE cs_done.case_id = cw.case_id
+                  AND cs_done.completed_at IS NOT NULL
+            )
             ORDER BY cw.case_id, cw.created_at DESC NULLS LAST
             LIMIT 300
             """,
@@ -736,7 +747,13 @@ def list_workflow_cases_for_org(org_id: str, org_user_id: str = None) -> List[Di
     # ── Strategy C: bulk_uploads.org_id ───────────────────────────────────────
     try:
         rows = _all(
-            f"{_CW_SELECT}WHERE bu.org_id = %s"
+            f"{_CW_SELECT}"
+            f"WHERE bu.org_id = %s"
+            f"  AND NOT EXISTS ("
+            f"      SELECT 1 FROM admin_schema.case_submission cs_done"
+            f"      WHERE cs_done.case_id = cw.case_id"
+            f"        AND cs_done.completed_at IS NOT NULL"
+            f"  )"
             f" ORDER BY cw.case_id, cw.created_at DESC NULLS LAST LIMIT 300",
             (oid,),
         )
@@ -746,6 +763,24 @@ def list_workflow_cases_for_org(org_id: str, org_user_id: str = None) -> List[Di
         print(f"[workflow_cases] strategy C failed for org {oid}: {e}")
 
     return []
+
+
+def list_bulk_upload_modalities_for_org(org_id: str) -> List[Dict[str, Any]]:
+    """Return (case_id, modality_type) for every bulk_upload row belonging to this org.
+
+    Used by the dashboard endpoint to compute Cases-by-Modality counts across ALL
+    org-uploaded cases, not just those that have reached admin_schema.case_submission.
+    This ensures the modality card reflects the true upload mix (XR/CT/MRI count)
+    even for cases still in QC or radiologist assignment pipeline.
+    """
+    return _all(
+        """
+        SELECT case_id, modality_type
+        FROM organization_schema.bulk_uploads
+        WHERE org_id = %s
+        """,
+        (str(org_id),),
+    )
 
 
 def get_bulk_upload_by_case_id(org_id: str, case_id: str) -> Optional[Dict[str, Any]]:

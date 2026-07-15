@@ -62,15 +62,11 @@
 .profile-row-new .value {
   font-weight: 500;
   color: #222;
+  font-size: 0.95rem;
 }
 
 .qual-select {
   max-width: 260px;
-}
-
-.file-name {
-  color: #666;
-  font-weight: 600;
 }
 
 .theme-btn-sm {
@@ -133,10 +129,6 @@
 
 .radiology-app.dark .profile-row-new .value {
   color: #cbd5e1;
-}
-
-.radiology-app.dark .file-name {
-  color: #94a3b8;
 }
 
 .radiology-app.dark .signature-preview {

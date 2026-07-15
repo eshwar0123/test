@@ -141,6 +141,17 @@ const Profile = () => {
     return `${b}/uploads/`;
   }, []);
 
+  // profile_image_path/degree_path/signature_path can be either a legacy
+  // relative path served from the local "/uploads/" static mount, or (for
+  // anything uploaded since the move to S3) an already-absolute presigned
+  // URL. Presigned URLs are unique per request (signed, short-lived), so
+  // they don't need cache-busting the way the deterministic legacy paths do.
+  const resolveUploadUrl = (value) => {
+    if (!value) return "";
+    if (/^https?:\/\//i.test(value)) return value;
+    return `${baseUploads}${value}?v=${Date.now()}`;
+  };
+
   const showSuccess = (m) => {
     setSuccess(m);
     setTimeout(() => setSuccess(""), 3000);
@@ -169,7 +180,7 @@ const Profile = () => {
       const savedAvatar = localStorage.getItem("avatarUrl") || "";
 
       if (data?.profile_image_path) {
-        const url = baseUploads + data.profile_image_path;
+        const url = resolveUploadUrl(data.profile_image_path);
         setPhotoPreview(url);
         localStorage.setItem("avatarUrl", url);
         notifyHeaderAvatar();
@@ -188,7 +199,7 @@ const Profile = () => {
       setDegreeName(data?.degree_path ? data.degree_path.split("/").pop() : "");
 
       // ----- Signature -----
-      setSignaturePreview(data?.signature_path ? baseUploads + data.signature_path : "");
+      setSignaturePreview(resolveUploadUrl(data?.signature_path));
     } catch (e) {
       showError(e.response?.data?.detail || "Failed to load profile");
     } finally {
@@ -449,7 +460,7 @@ const Profile = () => {
                     <span className="file-name">{degreeName || "Not uploaded"}</span>
                     {profile?.degree_path && (
                       <a
-                        href={`${baseUploads}${profile.degree_path}`}
+                        href={resolveUploadUrl(profile.degree_path)}
                         target="_blank"
                         rel="noreferrer"
                         style={{ marginLeft: 12, fontWeight: 700 }}

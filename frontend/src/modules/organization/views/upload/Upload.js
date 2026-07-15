@@ -271,9 +271,39 @@ export default function Upload() {
   });
   const [spFiles, setSpFiles] = useState([]);
   const [spSubmitting, setSpSubmitting] = useState(false);
+  const spFilesInputRef  = useRef(null);
+  const spFolderInputRef = useRef(null);
 
   const handleSpChange = (e) => setSp((s) => ({ ...s, [e.target.name]: e.target.value }));
-  const handleSpFiles  = (e) => setSpFiles(Array.from(e.target.files));
+
+  const applySpFiles = (picked) => {
+    const result = picked.filter((f) => IMAGE_EXT.test(f.name));
+    if (result.length === 0 && picked.length > 0) {
+      showBanner("error", "No supported image files found. Accepted: " + SUPPORTED);
+      return;
+    }
+    setSpFiles(result);
+  };
+
+  const handleSpFiles = (e) => applySpFiles(Array.from(e.target.files || []));
+
+  const handleSpDrop = async (e) => {
+    e.preventDefault();
+    const items = Array.from(e.dataTransfer.items || []);
+    let dropped = [];
+    if (items.length && items[0].webkitGetAsEntry) {
+      const entryResults = await Promise.all(
+        items.filter((i) => i.kind === "file").map((i) => {
+          const entry = i.webkitGetAsEntry?.();
+          return entry ? readEntry(entry) : Promise.resolve([]);
+        })
+      );
+      dropped = entryResults.flat();
+    } else {
+      dropped = Array.from(e.dataTransfer.files || []);
+    }
+    applySpFiles(dropped);
+  };
 
   const handleSpSubmit = (e) => {
     e.preventDefault();
@@ -772,11 +802,19 @@ export default function Upload() {
 
                   <div className="org-upload-form-group">
                     <label>Image Files <span style={{ color: "#94a3b8", fontWeight: 400 }}>(optional)</span></label>
-                    <label className="org-sp-dropzone">
-                      <input type="file" multiple
-                             accept=".dcm,.nii,.nii.gz,.png,.jpg,.jpeg,.mhd,.raw"
-                             style={{ display: "none" }}
-                             onChange={handleSpFiles} />
+                    <input ref={spFilesInputRef} type="file" multiple
+                           accept=".dcm,.nii,.nii.gz,.png,.jpg,.jpeg,.mhd,.raw"
+                           style={{ display: "none" }}
+                           onChange={handleSpFiles} />
+                    <input ref={spFolderInputRef} type="file" multiple
+                           /* @ts-ignore */ webkitdirectory="true" directory=""
+                           style={{ display: "none" }}
+                           onChange={handleSpFiles} />
+                    <div className="org-sp-dropzone"
+                         style={{ cursor: "pointer" }}
+                         onClick={() => spFilesInputRef.current?.click()}
+                         onDragOver={handleImagesDragOver}
+                         onDrop={handleSpDrop}>
                       {spFiles.length > 0 ? (
                         <span className="org-sp-drop-selected">✓ {spFiles.length} file{spFiles.length > 1 ? "s" : ""} selected</span>
                       ) : (
@@ -785,7 +823,12 @@ export default function Upload() {
                           <span className="org-upload-drop-hint">{SUPPORTED}</span>
                         </>
                       )}
-                    </label>
+                      <span className="org-upload-secondary-btn"
+                            style={{ marginTop: 8 }}
+                            onClick={(e) => { e.stopPropagation(); spFolderInputRef.current?.click(); }}>
+                        Browse Folder
+                      </span>
+                    </div>
                   </div>
 
                   <button type="submit" className="org-upload-primary-btn">
